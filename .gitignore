@@ -1,6 +1,6 @@
 .cache
 .pytest_cache
-.build
-.data
+build
+/data
 __pycache__/
 *.pyc

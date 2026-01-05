@@ -1,2 +1,3 @@
-# Homework 4
-Public repository and stub/testing code for Homework 4 of 10-714.
+# needle
+homework for cmu 10-414/714: Deep Learning Systems
+link:https://dlsyscourse.org/

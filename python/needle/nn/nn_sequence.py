@@ -140,10 +140,9 @@ class RNN(Module):
             h_t_lists = []
             h = h0_tuple[i] 
             for j in range(X.shape[0]):
-                input = self.rnn_cells[i](inputs[j], h)
-                h = input
-                h_t_lists.append(input)
-            h_n_lists.append(input)
+                h = self.rnn_cells[i](inputs[j], h)
+                h_t_lists.append(h)
+            h_n_lists.append(h)
             inputs = h_t_lists
         h_n = ops.stack(h_n_lists, 0)
         h_t = ops.stack(inputs, 0)
