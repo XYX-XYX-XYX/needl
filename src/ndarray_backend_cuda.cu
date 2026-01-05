@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -78,7 +79,19 @@ void Fill(CudaArray* out, scalar_t val) {
 ////////////////////////////////////////////////////////////////////////////////
 
 // Untility function to convert contiguous index i to memory location from strides
+__device__ static CudaVec GetIndices(CudaVec shape, size_t gid) 
+{
 
+  CudaVec indices;
+  indices.size = shape.size;
+  int idx = indices.size - 1;
+  for(; idx >= 0; idx--) {
+    indices.data[idx] = gid % shape.data[idx];
+    gid = gid / shape.data[idx];
+  }
+  return indices;
+
+}
 
 
 __global__ void CompactKernel(const scalar_t* a, scalar_t* out, size_t size, CudaVec shape,
@@ -96,9 +109,15 @@ __global__ void CompactKernel(const scalar_t* a, scalar_t* out, size_t size, Cud
    *   offset: offset of out array
    */
   size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
-
+  if(gid >= size) return;
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  auto out_ptr = out + gid;
+  CudaVec indices = GetIndices(shape, gid);
+  int32_t stride = 0;
+  for(size_t i = 0; i < indices.size; i++) {
+    stride += indices.data[i] * strides.data[i];
+  }
+  *out_ptr = a[offset + stride];
   /// END SOLUTION
 }
 
@@ -126,6 +145,21 @@ void Compact(const CudaArray& a, CudaArray* out, std::vector<int32_t> shape,
 }
 
 
+__global__ void EwiseSetitemKernel(const scalar_t* a, scalar_t* out, size_t size, CudaVec shape,
+                              CudaVec strides, size_t offset) 
+{
+
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid >= size) return;
+  auto out_ptr = out + offset;
+  auto a_ptr = a + gid;
+  CudaVec indices = GetIndices(shape, gid);
+  int32_t stride = 0;
+  for(size_t i = 0; i < indices.size; i++) {
+    stride += indices.data[i] * strides.data[i];
+  }
+  out_ptr[stride] = *a_ptr;
+}
 
 void EwiseSetitem(const CudaArray& a, CudaArray* out, std::vector<int32_t> shape,
                   std::vector<int32_t> strides, size_t offset) {
@@ -141,11 +175,26 @@ void EwiseSetitem(const CudaArray& a, CudaArray* out, std::vector<int32_t> shape
    *   offset: offset of the *out* array (not a, which has zero offset, being compact)
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  CudaDims dim = CudaOneDim(a.size);
+  EwiseSetitemKernel<<<dim.grid, dim.block>>>(a.ptr, out->ptr, a.size, VecToCuda(shape),
+                                         VecToCuda(strides), offset);
   /// END SOLUTION
 }
 
+__global__ void ScalarSetitemKernel(scalar_t val, scalar_t* out, size_t size, CudaVec shape,
+                              CudaVec strides, size_t offset) 
+{
 
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid >= size) return;
+  auto out_ptr = out + offset;
+  CudaVec indices = GetIndices(shape, gid);
+  int32_t stride = 0;
+  for(size_t i = 0; i < indices.size; i++) {
+    stride += indices.data[i] * strides.data[i];
+  }
+  out_ptr[stride] = val;
+}
 
 void ScalarSetitem(size_t size, scalar_t val, CudaArray* out, std::vector<int32_t> shape,
                    std::vector<int32_t> strides, size_t offset) {
@@ -163,7 +212,9 @@ void ScalarSetitem(size_t size, scalar_t val, CudaArray* out, std::vector<int32_
    *   offset: offset of the out array
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  CudaDims dim = CudaOneDim(size);
+  ScalarSetitemKernel<<<dim.grid, dim.block>>>(val, out->ptr, size, VecToCuda(shape),
+                                         VecToCuda(strides), offset);
   /// END SOLUTION
 }
 
@@ -232,12 +283,250 @@ void ScalarAdd(const CudaArray& a, scalar_t val, CudaArray* out) {
  * functions (however you want to do so, as long as the functions match the proper)
  * signatures above.
  */
+ 
+template <typename op> 
+__global__ void EwiseKernel(const scalar_t *a, const scalar_t *b, scalar_t *out, size_t size, op operation)
+{
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (gid < size) out[gid] = operation(a[gid], b[gid]);
+}
+struct MulOp { __device__ scalar_t operator()(scalar_t a, scalar_t b) const { return a * b; } };
+struct DivOp { __device__ scalar_t operator()(scalar_t a, scalar_t b) const { return a / b; } };
+struct MaxOp { __device__ scalar_t operator()(scalar_t a, scalar_t b) const { return max(a, b); } };
+struct EqOp { __device__ scalar_t operator()(scalar_t a, scalar_t b) const { return a == b; } };
+struct GeOp { __device__ scalar_t operator()(scalar_t a, scalar_t b) const { return a >= b; } };
+struct PowerOp { __device__ scalar_t operator()(scalar_t a, scalar_t b) const { return pow(a, b); } };
+struct LogOp { __device__ scalar_t operator()(scalar_t a) const { return log(a); } };
+struct ExpOp { __device__ scalar_t operator()(scalar_t a) const { return exp(a); } };
+struct TanhOp { __device__ scalar_t operator()(scalar_t a) const { return tanh(a); } };
 
+void EwiseMul(const CudaArray &a, const CudaArray &b, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  EwiseKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, out->size, MulOp());
+}
 
+void EwiseDiv(const CudaArray &a, const CudaArray &b, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  EwiseKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, out->size, DivOp());
+}
+
+void EwiseMaximum(const CudaArray &a, const CudaArray &b, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  EwiseKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, out->size, MaxOp());
+}
+
+void EwiseEq(const CudaArray &a, const CudaArray &b, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  EwiseKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, out->size, EqOp());
+} 
+
+void EwiseGe(const CudaArray &a, const CudaArray &b, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  EwiseKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, out->size, GeOp());
+} 
+
+template <typename op>
+__global__ void ScalarKernel(const scalar_t *a, const scalar_t val, scalar_t *out, size_t size, op operation)
+{
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid < size) out[gid] = operation(a[gid], val);
+}
+
+void ScalarMul(const CudaArray &a, const scalar_t val, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  ScalarKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size, MulOp());
+}
+
+void ScalarDiv(const CudaArray &a, const scalar_t val, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  ScalarKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size, DivOp());
+}
+
+void ScalarPower(const CudaArray &a, const scalar_t val, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  ScalarKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size, PowerOp());
+}
+
+void ScalarMaximum(const CudaArray &a, const scalar_t val, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  ScalarKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size, MaxOp());
+}
+
+void ScalarEq(const CudaArray &a, const scalar_t val, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  ScalarKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size, EqOp());
+}
+
+void ScalarGe(const CudaArray &a, const scalar_t val, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  ScalarKernel<<<dim.grid, dim.block>>>(a.ptr, val, out->ptr, out->size, GeOp());
+}
+
+template <typename op>
+__global__ void UnaryKernel(const scalar_t *a, scalar_t *out, size_t size, op operation)
+{
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid < size) out[gid] = operation(a[gid]);
+}
+
+void EwiseLog(const CudaArray &a, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  UnaryKernel<<<dim.grid, dim.block>>>(a.ptr, out->ptr, out->size, LogOp());
+}
+
+void EwiseExp(const CudaArray &a, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  UnaryKernel<<<dim.grid, dim.block>>>(a.ptr, out->ptr, out->size, ExpOp());
+}
+
+void EwiseTanh(const CudaArray &a, CudaArray *out)
+{
+  CudaDims dim = CudaOneDim(out->size);
+  UnaryKernel<<<dim.grid, dim.block>>>(a.ptr, out->ptr, out->size, TanhOp());
+}
 ////////////////////////////////////////////////////////////////////////////////
 // Elementwise and scalar operations
 ////////////////////////////////////////////////////////////////////////////////
 
+__global__ void NaiveMatmulKernel(const scalar_t *a, const scalar_t *b, scalar_t *out, uint32_t M, uint32_t N, uint32_t P)
+{
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid >= M * P) return;
+  uint32_t idx = gid % P;
+  uint32_t idy = gid / P;
+
+  scalar_t sum = 0;
+  for(size_t i = 0; i < N; i++) {
+    sum += a[idy * N + i] * b[i * P + idx];
+  }
+  out[idy * P + idx] = sum;
+}
+
+#define BLOCK_DIM 32
+
+__global__ void ShareMemoryMatmulKernel(const scalar_t* a, const scalar_t* b, scalar_t* out, uint32_t M, uint32_t N, uint32_t P) 
+{
+  int tx = threadIdx.x;
+  int ty = threadIdx.y;
+  int bx = blockIdx.x;
+  int by = blockIdx.y;
+
+  int row = by * BLOCK_DIM + ty;
+  int col = bx * BLOCK_DIM + tx;
+
+  scalar_t sum = 0;
+
+  __shared__ scalar_t As[BLOCK_DIM][BLOCK_DIM];
+  __shared__ scalar_t Bs[BLOCK_DIM][BLOCK_DIM];
+
+  for (int k = 0; k < (N + BLOCK_DIM - 1) / BLOCK_DIM; ++k) {
+    if (row < M && k * BLOCK_DIM + tx < N)
+      As[ty][tx] = a[row * N + k * BLOCK_DIM + tx];
+    else
+      As[ty][tx] = 0.0;
+
+    if (col < P && k * BLOCK_DIM + ty < N)
+      Bs[ty][tx] = b[(k * BLOCK_DIM + ty) * P + col];
+    else
+      Bs[ty][tx] = 0.0;
+
+    __syncthreads();
+
+    for (int n = 0; n < BLOCK_DIM; ++n)
+      sum += As[ty][n] * Bs[n][tx];
+
+    __syncthreads();
+  }
+
+  if (row < M && col < P)
+    out[row * P + col] = sum;
+}
+
+#define THREAD_DIM 2
+
+
+__global__ void Block2DMatmulKernel(const scalar_t* a, const scalar_t* b, scalar_t* out, uint32_t M, uint32_t N, uint32_t P)
+{
+  int bx = blockIdx.x;
+  int by = blockIdx.y;
+  int tidx = threadIdx.x;
+
+  __shared__ scalar_t As[BLOCK_DIM][BLOCK_DIM];
+  __shared__ scalar_t Bs[BLOCK_DIM][BLOCK_DIM];
+
+  int block_row = by * BLOCK_DIM;
+  int block_col = bx * BLOCK_DIM;
+
+  int load_row = tidx / BLOCK_DIM;
+  int load_col = tidx % BLOCK_DIM;
+
+  int compute_row = tidx / (BLOCK_DIM / THREAD_DIM) * THREAD_DIM;
+  int compute_col = tidx % (BLOCK_DIM / THREAD_DIM) * THREAD_DIM;
+
+  a = a + block_row * N;
+  b = b + block_col;
+  out = out + block_row * P + block_col;
+  
+  scalar_t result[THREAD_DIM * THREAD_DIM] = {0.0};
+  
+  for(size_t k = 0; k < (N + BLOCK_DIM - 1) / BLOCK_DIM; k++) {
+    //load As
+    for(size_t i = 0; i < BLOCK_DIM * BLOCK_DIM / BASE_THREAD_NUM; i++) {
+      int share_row = load_row + i * (BASE_THREAD_NUM / BLOCK_DIM);
+      int share_col = load_col;
+      if((block_row + share_row) < M && (k * BLOCK_DIM + share_col) < N)
+        As[share_row][share_col] = a[share_row * N + share_col];
+      else 
+        As[share_row][share_col] = 0.0;
+    }
+
+    //load Bs
+    for(size_t i = 0; i < BLOCK_DIM * BLOCK_DIM / BASE_THREAD_NUM; i++) {
+      int share_row = load_row + i * (BASE_THREAD_NUM / BLOCK_DIM);
+      int share_col = load_col;
+      if((k * BLOCK_DIM + share_row) < N && (block_col + share_col) < P)
+        Bs[share_row][share_col] = b[share_row * P + share_col];
+      else 
+        Bs[share_row][share_col] = 0.0;
+    }
+    
+    __syncthreads();
+
+    //compute
+    for(int m = 0; m < BLOCK_DIM; m++) {
+      for(int i = 0; i < THREAD_DIM; i++) {
+        for(int j = 0; j < THREAD_DIM; j++) {
+          result[i * THREAD_DIM + j] += As[compute_row + i][m] * Bs[m][compute_col + j];
+        }
+      }
+    }
+    __syncthreads();
+    
+    a += BLOCK_DIM;
+    b += BLOCK_DIM * P;
+  }
+
+  for(int i = 0; i < THREAD_DIM; i++) {
+    for(int j = 0; j < THREAD_DIM; j++) {
+      if((compute_row + block_row + i) < M && (compute_col + block_col + j) < P) {
+        out[(compute_row + i) * P + compute_col + j] = result[i * 2 + j];
+      }
+    }
+  }
+}
 
 void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, uint32_t N,
             uint32_t P) {
@@ -264,14 +553,35 @@ void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, 
    */
 
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  // CudaDims dim = CudaOneDim(out->size);
+  // NaiveMatmulKernel<<<dim.grid, dim.block>>>(a.ptr, b.ptr, out->ptr, M, N, P);
+
+  // dim3 block(BLOCK_DIM, BLOCK_DIM);
+  // dim3 grid((P + BLOCK_DIM - 1) / BLOCK_DIM, (M + BLOCK_DIM - 1) / BLOCK_DIM);
+  // ShareMemoryMatmulKernel<<<grid, block>>>(a.ptr, b.ptr, out->ptr, M, N, P);
+
+  dim3 block(BASE_THREAD_NUM);
+  dim3 grid((P + BLOCK_DIM - 1) / BLOCK_DIM, (M + BLOCK_DIM - 1) / BLOCK_DIM);
+  Block2DMatmulKernel<<<grid, block>>>(a.ptr, b.ptr, out->ptr, M, N, P);
   /// END SOLUTION
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Max and sum reductions
 ////////////////////////////////////////////////////////////////////////////////
+__global__ void ReduceMaxKernel(const scalar_t *a, scalar_t *out, size_t reduce_size, size_t size)
+{
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid >= size) return;
+  auto a_ptr = a + reduce_size * gid;
+  auto out_ptr = out + gid;
+  scalar_t max_num = a_ptr[0];
+  for(size_t i = 0; i < reduce_size; i++) {
+    max_num = max(max_num, a_ptr[i]);
+  }
 
+  *out_ptr = max_num;
+}
 
 void ReduceMax(const CudaArray& a, CudaArray* out, size_t reduce_size) {
   /**
@@ -284,11 +594,28 @@ void ReduceMax(const CudaArray& a, CudaArray* out, size_t reduce_size) {
    *   redice_size: size of the dimension to reduce over
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  CudaDims dim = CudaOneDim(out->size);
+  
+  ReduceMaxKernel<<<dim.grid, dim.block>>>(a.ptr, out->ptr, reduce_size, out->size);
+
   /// END SOLUTION
 }
 
+__global__ void ReduceSumKernel(const scalar_t *a, scalar_t *out, size_t reduce_size, size_t size)
+{
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(gid >= size) return;
 
+  auto a_ptr = a + reduce_size * gid;
+  auto out_ptr = out + gid;
+
+  scalar_t sum = 0; 
+  for(size_t i = 0; i < reduce_size; i++) {
+    sum += a_ptr[i];
+  }
+
+  *out_ptr = sum;
+}
 
 void ReduceSum(const CudaArray& a, CudaArray* out, size_t reduce_size) {
   /**
@@ -301,7 +628,9 @@ void ReduceSum(const CudaArray& a, CudaArray* out, size_t reduce_size) {
    *   redice_size: size of the dimension to reduce over
    */
   /// BEGIN SOLUTION
-  assert(false && "Not Implemented");
+  CudaDims dim = CudaOneDim(out->size);
+  ReduceSumKernel<<<dim.grid, dim.block>>>(a.ptr, out->ptr, reduce_size, out->size);
+
   /// END SOLUTION
 }
 

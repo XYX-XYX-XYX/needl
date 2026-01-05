@@ -25,7 +25,13 @@ class SGD(Optimizer):
 
     def step(self):
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        for param in self.params:
+            if param.grad is None:
+                 continue
+            if param not in self.u:
+                self.u[param] = ndl.init.zeros(*param.shape).detach()
+            self.u[param].data = self.momentum * self.u[param].data + (1 - self.momentum)*(param.grad.data + self.weight_decay * param.data)
+            param.data = param.data - self.lr * self.u[param].data
         ### END YOUR SOLUTION
 
     def clip_grad_norm(self, max_norm=0.25):
@@ -34,7 +40,17 @@ class SGD(Optimizer):
         Note: This does not need to be implemented for HW2 and can be skipped.
         """
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        total_norm = 0
+        for p in self.params:
+            if p.grad is not None:
+                total_norm += (p.grad.detach() ** 2).sum().numpy()
+        total_norm = np.sqrt(total_norm)
+        
+        clip_coef = max_norm / (total_norm + 1e-6)
+        if clip_coef < 1:
+            for p in self.params:
+                if p.grad is not None:
+                    p.grad.data = p.grad.data * clip_coef
         ### END YOUR SOLUTION
 
 
@@ -61,5 +77,24 @@ class Adam(Optimizer):
 
     def step(self):
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        self.t += 1
+        for param in self.params:
+            if param.grad is None:
+                continue
+            grad = param.grad.detach()
+            if self.weight_decay != 0.0:
+                grad = grad + self.weight_decay * param.data
+            if param not in self.m:
+                self.m[param] = ndl.init.zeros(*param.shape).detach()
+            self.m[param].data = self.beta1 * self.m[param].data + (1 - self.beta1) * grad.data
+            if param not in self.v:
+                self.v[param] = ndl.init.zeros(*param.shape).detach()
+            self.v[param].data = self.beta2 * self.v[param].data + (1 - self.beta2) * (grad.data ** 2)
+
+            m_hat = self.m[param] / (1 - self.beta1 ** self.t)
+            v_hat = self.v[param] / (1 - self.beta2 ** self.t)
+
+            param.data = param.data - self.lr * m_hat / (v_hat ** 0.5 + self.eps)
+
         ### END YOUR SOLUTION
+

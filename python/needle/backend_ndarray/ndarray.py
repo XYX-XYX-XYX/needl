@@ -262,8 +262,12 @@ class NDArray:
         """
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        if prod(self.shape) != prod(new_shape):
+            raise ValueError(f"Cannot reshape NDarray of size{prod(self.shape)} into size{prod(new_shape)}")
+        elif not self.is_compact():
+            raise ValueError(f"Cannot reshape an uncompact NDArray")
+        new_NDArray = self.make(tuple(new_shape), device=self.device, handle=self._handle, offset=self._offset)
+        return new_NDArray        ### END YOUR SOLUTION
 
     def permute(self, new_axes: tuple[int, ...]) -> "NDArray":
         """
@@ -287,7 +291,15 @@ class NDArray:
         """
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        new_shape = [0] * self.ndim
+        new_stride = [0] * self.ndim
+
+        for n, i in enumerate(new_axes):
+            new_shape[n] = self.shape[i]
+            new_stride[n] = self.strides[i]
+
+        new_NDarray = self.make(tuple(new_shape), tuple(new_stride), device=self.device, handle=self._handle, offset=self._offset)
+        return new_NDarray
         ### END YOUR SOLUTION
 
     def broadcast_to(self, new_shape: tuple[int, ...]) -> "NDArray":
@@ -311,8 +323,28 @@ class NDArray:
         """
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION]
+        new_stride = [0] * len(new_shape)
+        ndiff = len(new_shape) - len(self.shape)
+
+        if ndiff <= 0:
+            assert ndiff >= 0 ,"cannot broadcastto fewer dimension"
+        
+        for i in range(len(new_shape)):
+            if i < ndiff:
+                new_stride.append(0)
+            else:
+                old_width = self.shape[i - ndiff]
+                new_width = new_shape[i]
+                if new_width != old_width:
+                    if old_width != 1:
+                        raise ValueError(f"{new_width} Vs {old_width}")
+                    else:
+                        new_stride[i] = 0
+                else:
+                    new_stride[i] = self.strides[i - ndiff]
+        
+        return self.make(tuple(new_shape), tuple(new_stride), device=self.device, handle=self._handle, offset=self._offset)
+            ### END YOUR SOLUTION]
 
     ### Get and set elements
 
@@ -378,8 +410,14 @@ class NDArray:
         assert len(slices) == self.ndim, "Need indexes equal to number of dimensions"
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
-        ### END YOUR SOLUTION
+        new_shape = [0] * len(self.shape)
+        new_stride = [0] * len(self.strides)
+        new_offset = self._offset
+        for n, sl in enumerate(slices):
+            new_shape[n] = (sl.stop - sl.start + sl.step - 1) // sl.step
+            new_stride[n] =  sl.step * self.strides[n]
+            new_offset += self.strides[n] * sl.start
+        return self.make(tuple(new_shape), tuple(new_stride), self.device, self._handle, new_offset)        ### END YOUR SOLUTION
 
     def __setitem__(self, idxs: int | slice | tuple[int | slice, ...], other: Union["NDArray", float]) -> None:
         """Set the values of a view into an array, using the same semantics
@@ -559,22 +597,42 @@ class NDArray:
         if axis is None:
             view = self.compact().reshape((1,) * (self.ndim - 1) + (prod(self.shape),))
             #out = NDArray.make((1,) * self.ndim, device=self.device)
-            out = NDArray.make((1,), device=self.device)
+            out = NDArray.make((1,) * self.ndim
+                               if keepdims else
+                               (1,), 
+                               device=self.device)
 
         else:
-            if isinstance(axis, (tuple, list)):
-                assert len(axis) == 1, "Only support reduction over a single axis"
-                axis = axis[0]
+            # 规范化 axis 格式
+            if isinstance(axis, int):
+                axis = (axis,)
+            elif isinstance(axis, list):
+                axis = tuple(axis)
 
+            # --- 修改点 3: Permute 逻辑保持不变，但必须配合 Compact+Reshape ---
+            # 把不需要规约的放在前面，需要规约的放在后面
             view = self.permute(
-                tuple([a for a in range(self.ndim) if a != axis]) + (axis,)
+                tuple([a for a in range(self.ndim) if a not in axis]) + axis
             )
-            out = NDArray.make(
-                tuple([1 if i == axis else s for i, s in enumerate(self.shape)])
-                if keepdims else
-                tuple([s for i, s in enumerate(self.shape) if i != axis]),
-                device=self.device,
-            )
+            
+            # --- 修改点 4: 增加 Compact 和 Reshape (关键修复) ---
+            # 计算需要规约的总元素数量
+            reduce_size = prod([self.shape[i] for i in axis])
+            # 计算 view 应该保留的形状
+            kept_shape = tuple([self.shape[i] for i in range(self.ndim) if i not in axis])
+            
+            # 将多轴合并为一维： (*kept_shape, reduce_size)
+            # 只有这样，底层的 reduce 算子读取 shape[-1] 时才能一次性规约完 axis 指定的所有轴
+            view = view.compact().reshape(kept_shape + (reduce_size,))
+
+            # Out 的形状逻辑 (你原本的这部分逻辑是对的，稍微整理了一下)
+            if keepdims:
+                out_shape = tuple([1 if i in axis else s for i, s in enumerate(self.shape)])
+            else:
+                out_shape = tuple([s for i, s in enumerate(self.shape) if i not in axis])
+                
+            out = NDArray.make(out_shape, device=self.device)
+            
         return view, out
 
     def sum(self, axis: int | tuple[int, ...] | list[int] | None = None, keepdims: bool = False) -> "NDArray":
@@ -593,7 +651,16 @@ class NDArray:
         Note: compact() before returning.
         """
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        new_offset = self._offset
+        new_stride = []
+        for i, n in enumerate(self.strides):
+            if i in axes:
+                new_stride.append(-n)
+                new_offset += (self.shape[i] - 1) * n
+            else:
+                new_stride.append(n)
+        new_view = NDArray.make(self.shape, tuple(new_stride),self.device, self._handle, new_offset)
+        return new_view.compact()
         ### END YOUR SOLUTION
 
     def pad(self, axes: tuple[tuple[int, int], ...]) -> "NDArray":
@@ -603,8 +670,47 @@ class NDArray:
         axes = ( (0, 0), (1, 1), (0, 0)) pads the middle axis with a 0 on the left and right side.
         """
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        if len(self.shape) != len(axes):
+            raise ValueError("length of axes should be equal to the number of dimensions of the array")
+        newshape = []
+        slices = []
+        for i, n in enumerate(self.shape):
+            if axes[i] != (0,0):
+                dim = n + axes[i][0] + axes[i][1]
+                sli = slice(axes[i][0], axes[i][0] + n)
+            else:
+                dim = n
+                sli = slice(None)
+            newshape.append(dim)
+            slices.append(sli)
+        out = full(tuple(newshape), 0, self.dtype, self.device)
+        out[tuple(slices)] = self
+        return out
         ### END YOUR SOLUTION
+    
+    def dilate(self, axes : tuple, dilation : int) -> "NDArray":
+        new_shape = []
+        slices = []
+
+        for i, n in enumerate(self.shape) :
+            if i in axes:
+                new_shape.append(n * (dilation + 1))
+                slices.append(slice(None, None, dilation + 1))
+            else:
+                new_shape.append(n)
+                slices.append(slice(None))
+        out = full(tuple(new_shape), 0, self.dtype, self.device)
+        out[tuple(slices)] = self
+        return out
+    
+    def undilate(self, axes : tuple, dilation : int) -> "NDArray":
+        slices = []
+        for i in range(self.ndim):
+            if i in axes:
+                slices.append(slice(None, None, dilation + 1))
+            else:
+                slices.append(slice(None))
+        return self[tuple(slices)]
 
 def array(a: Any, dtype: str = "float32", device: BackendDevice | None = None) -> NDArray:
     """Convenience methods to match numpy a bit more closely."""
@@ -653,3 +759,59 @@ def sum(a: NDArray, axis: int | tuple[int] | list[int] | None = None, keepdims: 
 
 def flip(a: NDArray, axes: tuple[int, ...]) -> NDArray:
     return a.flip(axes)
+
+def stack(args, axis=0):
+    """
+    args: list of NDArray
+    axis: int
+    """
+    # 1. 计算堆叠后的新形状
+    new_shape = list(args[0].shape)
+    new_shape.insert(axis, len(args))
+    
+    # 2. 创建一个空的输出数组 (调用底层 C++ 分配显存)
+    # 假设你已经实现了 empty 或 full 函数
+    out = empty(tuple(new_shape), device=args[0].device)
+    
+    # 3. 将输入数组逐个填入输出数组
+    # 这需要你的 NDArray 实现了 __setitem__ (即切片赋值)
+    for i, arr in enumerate(args):
+        # 构造切片索引，例如 out[:, i, :, :] = arr
+        slices = [slice(None)] * len(new_shape)
+        slices[axis] = i
+        out[tuple(slices)] = arr
+        
+    return out
+
+def split(a: NDArray, axis=0):
+    array_nums = a.shape[axis]
+    new_shape = tuple([s for i, s in enumerate(a.shape) if i != axis])
+
+    arrays = []
+    for i in range(array_nums):
+        slices = [slice(None)] * len(a.shape)
+        slices[axis] = i
+        arrays.append(a[tuple(slices)].compact().reshape(new_shape))
+    return arrays
+
+def convolution(a: NDArray, kernel: NDArray, stride:int, padding:int):
+    if a.ndim != 4 or kernel.ndim != 4:
+        raise ValueError("Convolution dim error!")
+    
+    if padding > 0:
+        a = a.pad(((0, 0), (padding, padding), (padding, padding), (0, 0)))
+    
+    N, H, W, C_in = a.shape
+    K, K_W, _, C_out = kernel.shape
+
+    H_out = (H - K) // stride + 1
+    W_out = (W - K_W) // stride + 1
+    
+    ns, hs, ws, cs = a.strides
+    
+    new_shape = (N, H_out, W_out, K, K_W, C_in)
+    new_strides = (ns, hs * stride, ws * stride, hs, ws, cs)
+    
+    out = a.as_strided(new_shape, new_strides).compact().reshape((N * H_out * W_out, K * K_W * C_in))
+    return (out @ kernel.compact().reshape((K * K_W * C_in, C_out))).reshape((N, H_out, W_out, C_out))
+    

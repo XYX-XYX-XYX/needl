@@ -110,7 +110,41 @@ def epoch_general_cifar10(dataloader, model, loss_fn=nn.SoftmaxLoss(), opt=None)
     """
     np.random.seed(4)
     ### BEGIN YOUR SOLUTION
-    raise NotImplementedError()
+    if opt:
+        model.train()
+    else:
+        model.eval()
+
+    total_loss = 0
+    total_acc = 0
+    total_samples = 0
+
+    for batch in dataloader:
+        X, y = batch
+        if model.device is not None:
+            X = ndl.Tensor(X, device=model.device, dtype=model.dtype)
+            y = ndl.Tensor(y, device=model.device, dtype=model.dtype)
+        logits = model(X)
+        loss = loss_fn(logits, y)
+
+        if(opt):
+            opt.reset_grad()
+            loss.backward()
+            opt.step()
+        
+        batch_size = X.shape[0]
+        total_loss += loss.numpy() * batch_size
+
+        preds = logits.numpy().argmax(axis=1)
+        labels = y.numpy()
+        total_acc += np.sum(preds == labels)
+
+        total_samples += batch_size
+    
+    avg_acc = total_acc / total_samples
+    avg_loss = total_loss / total_samples
+
+    return avg_acc, avg_loss
     ### END YOUR SOLUTION
 
 
@@ -134,7 +168,10 @@ def train_cifar10(model, dataloader, n_epochs=1, optimizer=ndl.optim.Adam,
     """
     np.random.seed(4)
     ### BEGIN YOUR SOLUTION
-    raise NotImplementedError()
+    opt = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
+    for _ in range(n_epochs):
+        avg_acc, avg_loss = epoch_general_cifar10(dataloader, model, loss_fn(), opt)
+    return avg_acc, avg_loss
     ### END YOUR SOLUTION
 
 
@@ -153,7 +190,8 @@ def evaluate_cifar10(model, dataloader, loss_fn=nn.SoftmaxLoss):
     """
     np.random.seed(4)
     ### BEGIN YOUR SOLUTION
-    raise NotImplementedError()
+    avg_acc, avg_loss = epoch_general_cifar10(dataloader, model, loss_fn())
+    return avg_acc, avg_loss
     ### END YOUR SOLUTION
 
 
@@ -180,7 +218,48 @@ def epoch_general_ptb(data, model, seq_len=40, loss_fn=nn.SoftmaxLoss(), opt=Non
     """
     np.random.seed(4)
     ### BEGIN YOUR SOLUTION
-    raise NotImplementedError()
+    if opt:
+        model.train()
+    else:
+        model.eval()
+
+    total_loss = 0
+    total_acc = 0
+    total_samples = 0
+
+    iterations = (data.shape[0] + seq_len - 1) // seq_len
+    hidden = None
+    for i in range(iterations):
+        start_idx = i * seq_len
+        input_data, target = ndl.data.get_batch(data, start_idx, seq_len, device, dtype)
+        output_data, hidden = model(input_data, hidden)
+        if isinstance(hidden, tuple):
+            hidden = (hidden[0].detach(), hidden[1].detach())
+        else:
+            hidden = hidden.detach()
+        loss = loss_fn(output_data, target)
+
+        if(opt):
+            opt.reset_grad()
+            loss.backward()
+            if(clip):
+                opt.clip_grad_norm(clip)
+            opt.step()
+
+        batch_size = output_data.shape[0]
+        total_loss += loss.numpy() * batch_size
+
+        preds = output_data.numpy().argmax(axis = 1)
+        labels = target.numpy()
+        total_acc += np.sum(preds == labels)
+
+        total_samples += batch_size
+    
+    avg_acc = total_acc / total_samples
+    avg_loss = total_loss / total_samples
+
+    return avg_acc, avg_loss
+    
     ### END YOUR SOLUTION
 
 
@@ -207,7 +286,12 @@ def train_ptb(model, data, seq_len=40, n_epochs=1, optimizer=ndl.optim.SGD,
     """
     np.random.seed(4)
     ### BEGIN YOUR SOLUTION
-    raise NotImplementedError()
+    opt = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
+    loss_function = loss_fn()
+
+    for _ in range(n_epochs):
+        avg_acc, avg_loss = epoch_general_ptb(data, model, seq_len, loss_function, opt, clip, device, dtype)
+    return avg_acc, avg_loss
     ### END YOUR SOLUTION
 
 def evaluate_ptb(model, data, seq_len=40, loss_fn=nn.SoftmaxLoss,
@@ -227,7 +311,9 @@ def evaluate_ptb(model, data, seq_len=40, loss_fn=nn.SoftmaxLoss,
     """
     np.random.seed(4)
     ### BEGIN YOUR SOLUTION
-    raise NotImplementedError()
+    loss_function = loss_fn()
+    avg_acc, avg_loss = epoch_general_ptb(data, model, seq_len, loss_function, device=device, dtype=dtype)
+    return avg_acc, avg_loss
     ### END YOUR SOLUTION
 
 ### CODE BELOW IS FOR ILLUSTRATION, YOU DO NOT NEED TO EDIT

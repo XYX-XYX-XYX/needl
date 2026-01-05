@@ -6,7 +6,7 @@ from needle import ops
 import needle.init as init
 import numpy as np
 from .nn_basic import Parameter, Module
-
+import math
 
 class Conv(Module):
     """
@@ -28,10 +28,18 @@ class Conv(Module):
         self.stride = stride
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        self.weight = init.kaiming_uniform(shape=tuple([kernel_size, kernel_size, in_channels, out_channels]), nonlinearity="conv")
+        self.weight = Parameter(self.weight, device=device, dtype=dtype)
+        fan_in = self.kernel_size * self.kernel_size * self.in_channels
+        bound = 1.0 / math.sqrt(fan_in)
+        self.bias = init.rand(out_channels, low=-bound, high=bound, device=device, dtype=dtype)
+        self.bias = Parameter(self.bias, device=device, dtype=dtype)
         ### END YOUR SOLUTION
 
     def forward(self, x: Tensor) -> Tensor:
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        x_t = x.transpose(tuple([1,3])).transpose(tuple([1,2]))
+        out_unbias = ops.conv(x_t, self.weight, self.stride, self.kernel_size // 2) 
+        out = out_unbias + self.bias.reshape(tuple([1, 1, 1, self.out_channels])).broadcast_to(out_unbias.shape)
+        return out.transpose(tuple([1,3])).transpose(tuple([2,3]))
         ### END YOUR SOLUTION
