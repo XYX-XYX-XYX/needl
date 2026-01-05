@@ -29,7 +29,7 @@ class SGD(Optimizer):
             if param.grad is None:
                  continue
             if param not in self.u:
-                self.u[param] = ndl.init.zeros(*param.shape).detach()
+                self.u[param] = ndl.init.zeros(*param.shape, device=param.device, dtype=param.dtype).detach()
             self.u[param].data = self.momentum * self.u[param].data + (1 - self.momentum)*(param.grad.data + self.weight_decay * param.data)
             param.data = param.data - self.lr * self.u[param].data
         ### END YOUR SOLUTION
@@ -85,10 +85,10 @@ class Adam(Optimizer):
             if self.weight_decay != 0.0:
                 grad = grad + self.weight_decay * param.data
             if param not in self.m:
-                self.m[param] = ndl.init.zeros(*param.shape).detach()
+                self.m[param] = ndl.init.zeros(*param.shape, device=param.device, dtype=param.dtype).detach()
             self.m[param].data = self.beta1 * self.m[param].data + (1 - self.beta1) * grad.data
             if param not in self.v:
-                self.v[param] = ndl.init.zeros(*param.shape).detach()
+                self.v[param] = ndl.init.zeros(*param.shape, device=param.device, dtype=param.dtype).detach()
             self.v[param].data = self.beta2 * self.v[param].data + (1 - self.beta2) * (grad.data ** 2)
 
             m_hat = self.m[param] / (1 - self.beta1 ** self.t)
