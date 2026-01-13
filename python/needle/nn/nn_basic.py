@@ -227,7 +227,7 @@ class Dropout(Module):
         ### BEGIN YOUR SOLUTION
         if self.training:
             keep_p = 1 - self.p
-            mask = init.randb(*x.shape, p = keep_p)
+            mask = init.randb(*x.shape, p = keep_p, dtype=x.dtype, device=x.device)
             return x * mask / keep_p
         else :
             return x

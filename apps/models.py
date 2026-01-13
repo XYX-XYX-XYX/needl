@@ -76,12 +76,15 @@ class LanguageModel(nn.Module):
         """
         super(LanguageModel, self).__init__()
         ### BEGIN YOUR SOLUTION
+        self.linear = nn.Linear(hidden_size, output_size, device=device, dtype=dtype)
         self.embedding = nn.Embedding(output_size, embedding_size, device=device, dtype=dtype)
         if seq_model == 'rnn':
-            self.seq = nn.RNN(embedding_size, hidden_size, num_layers, device=device, dtype="float32")
+            self.seq = nn.RNN(embedding_size, hidden_size, num_layers, device=device, dtype=dtype)
+        elif seq_model == 'lstm':
+            self.seq = nn.LSTM(embedding_size, hidden_size, num_layers, device=device, dtype=dtype)
         else:
-            self.seq = nn.LSTM(embedding_size, hidden_size, num_layers, device=device, dtype="float32")
-        self.linear = nn.Linear(hidden_size, output_size, device=device, dtype=dtype)
+            self.seq = nn.Transformer(embedding_size, hidden_size, num_layers, device=device, dtype=dtype)
+            self.linear = nn.Linear(embedding_size, output_size, device=device, dtype=dtype)
         ### END YOUR SOLUTION
 
     def forward(self, x, h=None):
